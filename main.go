@@ -75,7 +75,7 @@ func groupNodesByMCP(tconfig *rest.Config, kubeClient *kubernetes.Clientset) (ma
 
 	// Create node lookup map for efficiency
 	nodeMap := createNodeMap(allNodes)
-	
+
 	return buildNodeGroups(mcpList, nodeMap)
 }
 
@@ -145,7 +145,7 @@ func buildNodeGroups(mcpList *machineconfigv1.MachineConfigPoolList, nodeMap map
 // shouldSkipMCP determines if an MCP should be skipped
 func shouldSkipMCP(mcp machineconfigv1.MachineConfigPool) bool {
 	if mcp.Status.MachineCount == 0 {
-		log.Infof("Skipping empty MCP %s", mcp.Name)
+		log.Debugf("Skipping empty MCP %s", mcp.Name)
 		return true
 	}
 	if mcp.Spec.NodeSelector == nil {
@@ -255,7 +255,7 @@ func checkPDBPods(pdbName, pdbNamespace string, minAvail, maxUnavail *intstr.Int
 
 	// Group pods by node group
 	groupPods := groupPodsByNodeGroup(podToNode, nodeToGroup)
-	
+
 	// Check for violations
 	return findViolations(pdbName, pdbNamespace, groupPods, maxDisruptable, podCount, minAvail, maxUnavail, nodeGroups), nil
 }
@@ -263,7 +263,7 @@ func checkPDBPods(pdbName, pdbNamespace string, minAvail, maxUnavail *intstr.Int
 // groupPodsByNodeGroup organizes pods by their node groups
 func groupPodsByNodeGroup(podToNode map[string]string, nodeToGroup map[string]string) map[string][]string {
 	groupPods := make(map[string][]string)
-	
+
 	for podName, nodeName := range podToNode {
 		groupName, exists := nodeToGroup[nodeName]
 		if !exists {
@@ -272,14 +272,14 @@ func groupPodsByNodeGroup(podToNode map[string]string, nodeToGroup map[string]st
 		}
 		groupPods[groupName] = append(groupPods[groupName], podName)
 	}
-	
+
 	return groupPods
 }
 
 // findViolations checks each node group for PDB violations
 func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string, maxDisruptable, podCount int32, minAvail, maxUnavail *intstr.IntOrString, nodeGroups map[string]*nodegroup.NodeGroup) []PDBViolation {
 	var violations []PDBViolation
-	
+
 	for groupName, pods := range groupPods {
 		podsInGroup := len(pods)
 		if podsInGroup <= int(maxDisruptable) {
@@ -289,7 +289,7 @@ func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string,
 		// Check if we should include this violation
 		if shouldIncludeViolation(groupName, nodeGroups) {
 			log.Debugf("Violation: Group %s has %d pods (max disruptable: %d)", groupName, podsInGroup, maxDisruptable)
-			
+
 			violations = append(violations, PDBViolation{
 				PDBName:         pdbName,
 				PDBNamespace:    pdbNamespace,
@@ -303,7 +303,7 @@ func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string,
 			})
 		}
 	}
-	
+
 	return violations
 }
 
@@ -314,7 +314,7 @@ func shouldIncludeViolation(groupName string, nodeGroups map[string]*nodegroup.N
 		log.Warnf("NodeGroup %s not found", groupName)
 		return true // Include unknown groups
 	}
-	
+
 	// Include if not serial upgrade, or if -all flag is set
 	return !nodeGroup.SerialUpgrade || includeAll
 }
@@ -420,7 +420,7 @@ func processPDBs(kubeClient *kubernetes.Clientset, nodeToGroup map[string]string
 func processSinglePDB(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBudget, podCache *PodCache, nodeToGroup map[string]string, nodeGroups map[string]*nodegroup.NodeGroup) ([]PDBViolation, error) {
 	pdbName := pdb.GetName()
 	pdbNamespace := pdb.GetNamespace()
-	
+
 	log.Debugf("Processing PDB: %s/%s", pdbNamespace, pdbName)
 
 	// Find pods for this PDB
@@ -759,9 +759,9 @@ func main() {
 
 	kubeClient, tconfig := initializeClients(config.kubeconfig)
 	violations, podCache := analyzePDBViolations(kubeClient, tconfig)
-	
+
 	displayPDBViolationSummary(violations)
-	
+
 	if config.fixViolations && len(violations) > 0 {
 		if err := fixPDBViolationsInteractively(kubeClient, violations, podCache); err != nil {
 			log.Errorf("Error during interactive remediation: %v", err)
@@ -780,7 +780,7 @@ type Config struct {
 // parseFlags parses command line flags and returns configuration
 func parseFlags() Config {
 	var config Config
-	
+
 	flag.StringVar(&config.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "Path to kubeconfig. Default is to use env var KUBECONFIG")
 	flag.StringVar(&config.loglevel, "loglevel", "", "Log level [debug|info|warn|error]")
 	flag.BoolVar(&config.debug, "debug", false, "Set log level to debug (overrides loglevel)")
@@ -798,7 +798,7 @@ func setupLogging(loglevel string, debug bool) {
 		log.SetLevel(log.DebugLevel)
 		return
 	}
-	
+
 	switch loglevel {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
