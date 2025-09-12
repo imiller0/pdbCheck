@@ -1,3 +1,9 @@
+/****************************************************************
+ *
+ * This code was developed with AI code generation assistance
+ *
+ ****************************************************************/
+
 package main
 
 import (
