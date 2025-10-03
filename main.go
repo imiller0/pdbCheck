@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"k8s.io/client-go/kubernetes"
@@ -65,24 +64,25 @@ func init() {
 }
 
 // groupNodesByMCP creates node groups based on Machine Config Pools
-func groupNodesByMCP(tconfig *rest.Config, kubeClient *kubernetes.Clientset) (map[string]*nodegroup.NodeGroup, map[string]string, error) {
+func groupNodesByMCP(tconfig *rest.Config, kubeClient *kubernetes.Clientset) (*nodegroup.Collection, error) {
 	mcClient := machineconfigclient.NewForConfigOrDie(tconfig)
 
 	// Fetch MCPs and nodes concurrently
 	mcpList, allNodes, err := fetchMCPsAndNodes(mcClient, kubeClient)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if len(mcpList.Items) == 0 {
 		log.Info("No MCPs found")
-		return nil, nil, nil
+		return nodegroup.NewCollection(), nil
 	}
 
 	// Create node lookup map for efficiency
 	nodeMap := createNodeMap(allNodes)
 
-	return buildNodeGroups(mcpList, nodeMap)
+	// Build node groups using the nodegroup package
+	return nodegroup.BuildFromMCPs(mcpList, nodeMap)
 }
 
 // fetchMCPsAndNodes retrieves MCPs and nodes concurrently
@@ -124,69 +124,6 @@ func createNodeMap(nodeList *corev1.NodeList) map[string]*corev1.Node {
 		nodeMap[nodeList.Items[i].Name] = &nodeList.Items[i]
 	}
 	return nodeMap
-}
-
-// buildNodeGroups processes MCPs and creates node groups
-func buildNodeGroups(mcpList *machineconfigv1.MachineConfigPoolList, nodeMap map[string]*corev1.Node) (map[string]*nodegroup.NodeGroup, map[string]string, error) {
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
-	nodeToGroup := make(map[string]string)
-
-	for _, mcp := range mcpList.Items {
-		if shouldSkipMCP(mcp) {
-			continue
-		}
-
-		nodeGroup, err := createNodeGroupFromMCP(mcp, nodeMap, nodeToGroup)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create node group for MCP %s: %w", mcp.Name, err)
-		}
-
-		nodeGroups[mcp.Name] = nodeGroup
-		log.Debugf("Created node group %s with %d nodes (serial: %v)", mcp.Name, len(nodeGroup.Nodes), nodeGroup.SerialUpgrade)
-	}
-
-	return nodeGroups, nodeToGroup, nil
-}
-
-// shouldSkipMCP determines if an MCP should be skipped
-func shouldSkipMCP(mcp machineconfigv1.MachineConfigPool) bool {
-	if mcp.Status.MachineCount == 0 {
-		log.Debugf("Skipping empty MCP %s", mcp.Name)
-		return true
-	}
-	if mcp.Spec.NodeSelector == nil {
-		log.Infof("Skipping MCP %s with no node selector", mcp.Name)
-		return true
-	}
-	return false
-}
-
-// createNodeGroupFromMCP creates a node group from an MCP
-func createNodeGroupFromMCP(mcp machineconfigv1.MachineConfigPool, nodeMap map[string]*corev1.Node, nodeToGroup map[string]string) (*nodegroup.NodeGroup, error) {
-	labelSelector, err := metav1.LabelSelectorAsSelector(mcp.Spec.NodeSelector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert nodeSelector: %w", err)
-	}
-
-	nodeGroup := nodegroup.New()
-	nodeGroup.Name = mcp.Name
-	nodeGroup.SerialUpgrade = isSerialUpgrade(mcp)
-
-	// Find matching nodes
-	for nodeName, node := range nodeMap {
-		if labelSelector.Matches(labels.Set(node.Labels)) {
-			nodeGroup.Nodes[nodeName] = true
-			nodeToGroup[nodeName] = mcp.Name
-		}
-	}
-
-	log.Debugf("MCP %s: %d nodes, serial upgrade: %v", mcp.Name, len(nodeGroup.Nodes), nodeGroup.SerialUpgrade)
-	return nodeGroup, nil
-}
-
-// isSerialUpgrade determines if an MCP uses serial upgrades
-func isSerialUpgrade(mcp machineconfigv1.MachineConfigPool) bool {
-	return mcp.Spec.MaxUnavailable == nil || mcp.Spec.MaxUnavailable.IntVal == 1
 }
 
 func getAsCount(value intstr.IntOrString, count int32) (int32, error) {
@@ -242,7 +179,7 @@ func calculatePDBDisruptionLimits(minAvailable, maxUnavailable *intstr.IntOrStri
 * Check if the PDB would be violated if any of the node groups are taken offline
 * Returns a slice of PDBViolation for groups that would violate the PDB
  */
-func checkPDBPods(pdbName, pdbNamespace string, minAvail, maxUnavail *intstr.IntOrString, podToNode map[string]string, nodeToGroup map[string]string, nodeGroups map[string]*nodegroup.NodeGroup) ([]PDBViolation, error) {
+func checkPDBPods(pdbName, pdbNamespace string, minAvail, maxUnavail *intstr.IntOrString, podToNode map[string]string, nodeGroups *nodegroup.Collection) ([]PDBViolation, error) {
 	podCount := int32(len(podToNode))
 	if podCount == 0 {
 		log.Warnf("PDB %s/%s has no matching pods", pdbNamespace, pdbName)
@@ -260,18 +197,18 @@ func checkPDBPods(pdbName, pdbNamespace string, minAvail, maxUnavail *intstr.Int
 	}
 
 	// Group pods by node group
-	groupPods := groupPodsByNodeGroup(podToNode, nodeToGroup)
+	groupPods := groupPodsByNodeGroup(podToNode, nodeGroups)
 
 	// Check for violations
 	return findViolations(pdbName, pdbNamespace, groupPods, maxDisruptable, podCount, minAvail, maxUnavail, nodeGroups), nil
 }
 
 // groupPodsByNodeGroup organizes pods by their node groups
-func groupPodsByNodeGroup(podToNode map[string]string, nodeToGroup map[string]string) map[string][]string {
+func groupPodsByNodeGroup(podToNode map[string]string, nodeGroups *nodegroup.Collection) map[string][]string {
 	groupPods := make(map[string][]string)
 
 	for podName, nodeName := range podToNode {
-		groupName, exists := nodeToGroup[nodeName]
+		groupName, exists := nodeGroups.NodeToGroup[nodeName]
 		if !exists {
 			log.Infof("Pod %s on node %s not in any indexed node group", podName, nodeName)
 			groupName = "unknown"
@@ -283,7 +220,7 @@ func groupPodsByNodeGroup(podToNode map[string]string, nodeToGroup map[string]st
 }
 
 // findViolations checks each node group for PDB violations
-func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string, maxDisruptable, podCount int32, minAvail, maxUnavail *intstr.IntOrString, nodeGroups map[string]*nodegroup.NodeGroup) []PDBViolation {
+func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string, maxDisruptable, podCount int32, minAvail, maxUnavail *intstr.IntOrString, nodeGroups *nodegroup.Collection) []PDBViolation {
 	var violations []PDBViolation
 
 	for groupName, pods := range groupPods {
@@ -292,37 +229,31 @@ func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string,
 			continue // No violation
 		}
 
-		// Check if we should include this violation
-		if shouldIncludeViolation(groupName, nodeGroups) {
-			log.Debugf("Violation: Group %s has %d pods (max disruptable: %d)", groupName, podsInGroup, maxDisruptable)
-
-			violations = append(violations, PDBViolation{
-				PDBName:         pdbName,
-				PDBNamespace:    pdbNamespace,
-				NodeGroupName:   groupName,
-				PodsInNodeGroup: pods,
-				PodCount:        podCount,
-				MaxDisruptable:  maxDisruptable,
-				PodsInGroup:     podsInGroup,
-				MinAvailable:    minAvail,
-				MaxUnavailable:  maxUnavail,
-			})
+		// Check if we should include this violation using the nodegroup method
+		nodeGroup, exists := nodeGroups.GetGroup(groupName)
+		if !exists {
+			log.Warnf("NodeGroup %s not found", groupName)
+			// Include unknown groups
+		} else if !nodeGroup.ShouldIncludeInAnalysis(includeAll) {
+			continue // Skip this violation
 		}
+
+		log.Debugf("Violation: Group %s has %d pods (max disruptable: %d)", groupName, podsInGroup, maxDisruptable)
+
+		violations = append(violations, PDBViolation{
+			PDBName:         pdbName,
+			PDBNamespace:    pdbNamespace,
+			NodeGroupName:   groupName,
+			PodsInNodeGroup: pods,
+			PodCount:        podCount,
+			MaxDisruptable:  maxDisruptable,
+			PodsInGroup:     podsInGroup,
+			MinAvailable:    minAvail,
+			MaxUnavailable:  maxUnavail,
+		})
 	}
 
 	return violations
-}
-
-// shouldIncludeViolation determines if a violation should be included based on flags
-func shouldIncludeViolation(groupName string, nodeGroups map[string]*nodegroup.NodeGroup) bool {
-	nodeGroup, exists := nodeGroups[groupName]
-	if !exists {
-		log.Warnf("NodeGroup %s not found", groupName)
-		return true // Include unknown groups
-	}
-
-	// Include if not serial upgrade, or if -all flag is set
-	return !nodeGroup.SerialUpgrade || includeAll
 }
 
 /**
@@ -372,7 +303,7 @@ func findPDBPods(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBu
 	return podData, nil
 }
 
-func processPDBs(kubeClient *kubernetes.Clientset, nodeToGroup map[string]string, nodeGroups map[string]*nodegroup.NodeGroup) ([]PDBViolation, *PodCache, error) {
+func processPDBs(kubeClient *kubernetes.Clientset, nodeGroups *nodegroup.Collection) ([]PDBViolation, *PodCache, error) {
 	var allViolations []PDBViolation
 	podCache := NewPodCache()
 
@@ -398,7 +329,7 @@ func processPDBs(kubeClient *kubernetes.Clientset, nodeToGroup map[string]string
 		wg.Add(1)
 		go func(pdb policyv1.PodDisruptionBudget) {
 			defer wg.Done()
-			violations, err := processSinglePDB(kubeClient, &pdb, podCache, nodeToGroup, nodeGroups)
+			violations, err := processSinglePDB(kubeClient, &pdb, podCache, nodeGroups)
 			pdbId := fmt.Sprintf("%s/%s", pdb.GetNamespace(), pdb.GetName())
 			resultChan <- pdbResult{violations, err, pdbId}
 		}(pdb)
@@ -423,7 +354,7 @@ func processPDBs(kubeClient *kubernetes.Clientset, nodeToGroup map[string]string
 }
 
 // processSinglePDB handles the processing of a single PDB
-func processSinglePDB(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBudget, podCache *PodCache, nodeToGroup map[string]string, nodeGroups map[string]*nodegroup.NodeGroup) ([]PDBViolation, error) {
+func processSinglePDB(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBudget, podCache *PodCache, nodeGroups *nodegroup.Collection) ([]PDBViolation, error) {
 	pdbName := pdb.GetName()
 	pdbNamespace := pdb.GetNamespace()
 
@@ -436,7 +367,7 @@ func processSinglePDB(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisrupt
 	}
 
 	// Check for violations
-	return checkPDBPods(pdbName, pdbNamespace, pdb.Spec.MinAvailable, pdb.Spec.MaxUnavailable, podToNode, nodeToGroup, nodeGroups)
+	return checkPDBPods(pdbName, pdbNamespace, pdb.Spec.MinAvailable, pdb.Spec.MaxUnavailable, podToNode, nodeGroups)
 }
 
 // displayPDBViolationSummary shows a summary of all PDB violations found
@@ -834,13 +765,13 @@ func initializeClients(kubeconfig string) (*kubernetes.Clientset, *rest.Config) 
 // analyzePDBViolations performs the main analysis
 func analyzePDBViolations(kubeClient *kubernetes.Clientset, tconfig *rest.Config) ([]PDBViolation, *PodCache) {
 	// Get node groups
-	nodeGroups, nodeToGroup, err := groupNodesByMCP(tconfig, kubeClient)
+	nodeGroups, err := groupNodesByMCP(tconfig, kubeClient)
 	if err != nil {
 		log.Fatalf("Failed to get node groupings: %v", err)
 	}
 
 	// Analyze PDBs
-	violations, podCache, err := processPDBs(kubeClient, nodeToGroup, nodeGroups)
+	violations, podCache, err := processPDBs(kubeClient, nodeGroups)
 	if err != nil {
 		log.Fatalf("Failed to process PDBs: %v", err)
 	}

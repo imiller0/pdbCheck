@@ -28,21 +28,21 @@ func TestPDBViolationWithTwoNodeGroups(t *testing.T) {
 	// PDB configuration: maxUnavailable = 1
 	maxUnavailable := intstr.FromInt(1)
 
-	// Create node groups
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
+	// Create node groups collection
+	nodeGroups := nodegroup.NewCollection()
 
 	// First node group with 2 nodes
 	nodeGroup1 := nodegroup.New()
 	nodeGroup1.Name = "worker"
 	nodeGroup1.Nodes["node1"] = true
 	nodeGroup1.Nodes["node2"] = true
-	nodeGroups["worker"] = nodeGroup1
+	nodeGroups.AddGroup(nodeGroup1)
 
 	// Second node group with 1 node
 	nodeGroup2 := nodegroup.New()
 	nodeGroup2.Name = "master"
 	nodeGroup2.Nodes["node3"] = true
-	nodeGroups["master"] = nodeGroup2
+	nodeGroups.AddGroup(nodeGroup2)
 
 	// Pod to node mapping (3 pods total)
 	podToNode := map[string]string{
@@ -51,15 +51,8 @@ func TestPDBViolationWithTwoNodeGroups(t *testing.T) {
 		"app-pod-3": "node3", // In master group
 	}
 
-	// Node to group mapping
-	nodeToGroup := map[string]string{
-		"node1": "worker",
-		"node2": "worker",
-		"node3": "master",
-	}
-
 	// Call the function under test
-	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeToGroup, nodeGroups)
+	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeGroups)
 
 	// Verify results
 	if err != nil {
@@ -141,15 +134,15 @@ func TestPDBViolationWithMinAvailable(t *testing.T) {
 	// PDB configuration: minAvailable = 3 (so maxDisruptable = 4-3 = 1)
 	minAvailable := intstr.FromInt(3)
 
-	// Create node group
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
+	// Create node group collection
+	nodeGroups := nodegroup.NewCollection()
 	nodeGroup1 := nodegroup.New()
 	nodeGroup1.Name = "worker"
 	nodeGroup1.Nodes["node1"] = true
 	nodeGroup1.Nodes["node2"] = true
 	nodeGroup1.Nodes["node3"] = true
 	nodeGroup1.Nodes["node4"] = true
-	nodeGroups["worker"] = nodeGroup1
+	nodeGroups.AddGroup(nodeGroup1)
 
 	// Pod to node mapping (4 pods total, all in worker group)
 	podToNode := map[string]string{
@@ -159,16 +152,8 @@ func TestPDBViolationWithMinAvailable(t *testing.T) {
 		"app-pod-4": "node4",
 	}
 
-	// Node to group mapping
-	nodeToGroup := map[string]string{
-		"node1": "worker",
-		"node2": "worker",
-		"node3": "worker",
-		"node4": "worker",
-	}
-
 	// Call the function under test
-	violations, err := checkPDBPods(pdbName, pdbNamespace, &minAvailable, nil, podToNode, nodeToGroup, nodeGroups)
+	violations, err := checkPDBPods(pdbName, pdbNamespace, &minAvailable, nil, podToNode, nodeGroups)
 
 	// Verify results
 	if err != nil {
@@ -222,19 +207,19 @@ func TestPDBNoViolations(t *testing.T) {
 	maxUnavailable := intstr.FromInt(2)
 
 	// Create node groups
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
+	nodeGroups := nodegroup.NewCollection()
 
 	nodeGroup1 := nodegroup.New()
 	nodeGroup1.Name = "worker"
 	nodeGroup1.Nodes["node1"] = true
 	nodeGroup1.Nodes["node2"] = true
-	nodeGroups["worker"] = nodeGroup1
+	nodeGroups.AddGroup(nodeGroup1)
 
 	nodeGroup2 := nodegroup.New()
 	nodeGroup2.Name = "master"
 	nodeGroup2.Nodes["node3"] = true
 	nodeGroup2.Nodes["node4"] = true
-	nodeGroups["master"] = nodeGroup2
+	nodeGroups.AddGroup(nodeGroup2)
 
 	// Pod to node mapping (4 pods total, 2 per group)
 	podToNode := map[string]string{
@@ -244,16 +229,8 @@ func TestPDBNoViolations(t *testing.T) {
 		"app-pod-4": "node4", // In master group
 	}
 
-	// Node to group mapping
-	nodeToGroup := map[string]string{
-		"node1": "worker",
-		"node2": "worker",
-		"node3": "master",
-		"node4": "master",
-	}
-
 	// Call the function under test
-	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeToGroup, nodeGroups)
+	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeGroups)
 
 	// Verify results
 	if err != nil {
@@ -282,7 +259,7 @@ func TestPDBViolationWithSerialUpgradeTrue(t *testing.T) {
 	maxUnavailable := intstr.FromInt(1)
 
 	// Create node groups
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
+	nodeGroups := nodegroup.NewCollection()
 
 	// First node group with SerialUpgrade = true
 	nodeGroup1 := nodegroup.New()
@@ -290,14 +267,14 @@ func TestPDBViolationWithSerialUpgradeTrue(t *testing.T) {
 	nodeGroup1.SerialUpgrade = true // This should prevent violation tracking
 	nodeGroup1.Nodes["node1"] = true
 	nodeGroup1.Nodes["node2"] = true
-	nodeGroups["worker"] = nodeGroup1
+	nodeGroups.AddGroup(nodeGroup1)
 
 	// Second node group with SerialUpgrade = false
 	nodeGroup2 := nodegroup.New()
 	nodeGroup2.Name = "master"
 	nodeGroup2.SerialUpgrade = false
 	nodeGroup2.Nodes["node3"] = true
-	nodeGroups["master"] = nodeGroup2
+	nodeGroups.AddGroup(nodeGroup2)
 
 	// Pod to node mapping (3 pods total)
 	podToNode := map[string]string{
@@ -306,15 +283,8 @@ func TestPDBViolationWithSerialUpgradeTrue(t *testing.T) {
 		"app-pod-3": "node3", // In master group (SerialUpgrade=false)
 	}
 
-	// Node to group mapping
-	nodeToGroup := map[string]string{
-		"node1": "worker",
-		"node2": "worker",
-		"node3": "master",
-	}
-
 	// Call the function under test
-	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeToGroup, nodeGroups)
+	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeGroups)
 
 	// Verify results
 	if err != nil {
@@ -489,7 +459,7 @@ func TestPDBViolationWithSerialUpgradeTrueAndAll(t *testing.T) {
 	maxUnavailable := intstr.FromInt(1)
 
 	// Create node groups
-	nodeGroups := make(map[string]*nodegroup.NodeGroup)
+	nodeGroups := nodegroup.NewCollection()
 
 	// Node group with SerialUpgrade = true
 	nodeGroup1 := nodegroup.New()
@@ -497,7 +467,7 @@ func TestPDBViolationWithSerialUpgradeTrueAndAll(t *testing.T) {
 	nodeGroup1.SerialUpgrade = true // Would normally prevent tracking
 	nodeGroup1.Nodes["node1"] = true
 	nodeGroup1.Nodes["node2"] = true
-	nodeGroups["worker"] = nodeGroup1
+	nodeGroups.AddGroup(nodeGroup1)
 
 	// Pod to node mapping (2 pods total, both in worker group)
 	podToNode := map[string]string{
@@ -505,14 +475,8 @@ func TestPDBViolationWithSerialUpgradeTrueAndAll(t *testing.T) {
 		"app-pod-2": "node2", // In worker group
 	}
 
-	// Node to group mapping
-	nodeToGroup := map[string]string{
-		"node1": "worker",
-		"node2": "worker",
-	}
-
 	// Call the function under test
-	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeToGroup, nodeGroups)
+	violations, err := checkPDBPods(pdbName, pdbNamespace, nil, &maxUnavailable, podToNode, nodeGroups)
 
 	// Verify results
 	if err != nil {
