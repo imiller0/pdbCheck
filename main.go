@@ -694,6 +694,13 @@ func main() {
 		log.Fatalf("No kubeconfig provided")
 	}
 
+	// If the flag was explicitly passed, verify that the file exists
+	if config.kubeconfigExplicit {
+		if _, err := os.Stat(config.kubeconfig); os.IsNotExist(err) {
+			log.Fatalf("kubeconfig file not found: %s", config.kubeconfig)
+		}
+	}
+
 	kubeClient, tconfig := initializeClients(config.kubeconfig)
 	violations, podCache := analyzePDBViolations(kubeClient, tconfig)
 
@@ -708,17 +715,18 @@ func main() {
 
 // Config holds command-line configuration
 type Config struct {
-	kubeconfig    string
-	loglevel      string
-	debug         bool
-	fixViolations bool
+	kubeconfig         string
+	kubeconfigExplicit bool
+	loglevel           string
+	debug              bool
+	fixViolations      bool
 }
 
 // parseFlags parses command line flags and returns configuration
 func parseFlags() Config {
 	var config Config
 
-	flag.StringVar(&config.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "Path to kubeconfig. Default is to use env var KUBECONFIG")
+	flag.StringVar(&config.kubeconfig, "kubeconfig", "", "Path to kubeconfig. Default is to use env var KUBECONFIG")
 	flag.StringVar(&config.loglevel, "loglevel", "", "Log level [debug|info|warn|error]")
 	flag.BoolVar(&config.debug, "debug", false, "Set log level to debug (overrides loglevel)")
 	flag.BoolVar(&isVerbose, "verbose", false, "Enable verbose output")
@@ -726,6 +734,19 @@ func parseFlags() Config {
 	flag.BoolVar(&config.fixViolations, "fix-violations", false, "Enable interactive mode to fix PDB violations by deleting pods")
 
 	flag.Parse()
+
+	// Check if the -kubeconfig flag was explicitly passed
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "kubeconfig" {
+			config.kubeconfigExplicit = true
+		}
+	})
+
+	// If the flag was not passed, use the environment variable
+	if !config.kubeconfigExplicit {
+		config.kubeconfig = os.Getenv("KUBECONFIG")
+	}
+
 	return config
 }
 
@@ -750,12 +771,24 @@ func setupLogging(loglevel string, debug bool) {
 
 // initializeClients creates Kubernetes clients
 func initializeClients(kubeconfig string) (*kubernetes.Clientset, *rest.Config) {
-	tconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	).ClientConfig()
-	if err != nil {
-		log.Fatalf("Failed to initialize config client: %v", err)
+	var tconfig *rest.Config
+	var err error
+
+	// If an explicit path was provided, use it directly
+	if kubeconfig != "" {
+		tconfig, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			log.Fatalf("Failed to build config from kubeconfig file %s: %v", kubeconfig, err)
+		}
+	} else {
+		// If not provided, use default rules (which include the environment variable)
+		tconfig, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			clientcmd.NewDefaultClientConfigLoadingRules(),
+			&clientcmd.ConfigOverrides{},
+		).ClientConfig()
+		if err != nil {
+			log.Fatalf("Failed to initialize config client: %v", err)
+		}
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(tconfig)
