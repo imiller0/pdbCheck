@@ -16,7 +16,7 @@ This program analyzes OpenShift/Kubernetes clusters to identify potential PodDis
 ## Usage
 
 ```bash
-./pdbCheck -kubeconfig=/path/to/kubeconfig [options]
+./pdbCheck -kubeconfig /path/to/kubeconfig [options]
 ```
 
 ### Options
@@ -32,22 +32,22 @@ This program analyzes OpenShift/Kubernetes clusters to identify potential PodDis
 
 Basic analysis:
 ```bash
-./pdbCheck -kubeconfig=~/.kube/config
+./pdbCheck -kubeconfig ~/.kube/config
 ```
 
 Include all violations (including serial upgrade MCPs):
 ```bash
-./pdbCheck -kubeconfig=~/.kube/config -all
+./pdbCheck -kubeconfig ~/.kube/config -all
 ```
 
 Verbose analysis with detailed output:
 ```bash
-./pdbCheck -kubeconfig=~/.kube/config -verbose
+./pdbCheck -kubeconfig ~/.kube/config -verbose
 ```
 
 Interactive remediation mode:
 ```bash
-./pdbCheck -kubeconfig=~/.kube/config -fix-violations
+./pdbCheck -kubeconfig ~/.kube/config -fix-violations
 ```
 
 ## How it Works
