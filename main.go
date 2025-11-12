@@ -256,9 +256,27 @@ func findViolations(pdbName, pdbNamespace string, groupPods map[string][]string,
 	return violations
 }
 
+// isPodDisruptable checks if a pod is disruptable for PDB calculations.
+// A pod is disruptable if it is Running, not being deleted, and Ready.
+func isPodDisruptable(pod *corev1.Pod) bool {
+	// Pod must be in Running phase
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+
+	// Pod must not have DeletionTimestamp (not being terminated)
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+
+	// Pod must have Ready condition set to true
+	return podHasReadyCondition(pod)
+}
+
 /**
 * For the given PDB return a map of pods (string key) to node hosting that pod (string name)
 * Also populates the podCache with detailed pod information including creation timestamps
+* Only includes pods that are disruptable (Running, not terminating, and Ready)
  */
 func findPDBPods(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBudget, podCache *PodCache) (map[string]string, error) {
 
@@ -287,6 +305,14 @@ func findPDBPods(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBu
 
 	podData := make(map[string]string)
 	for _, pod := range pods.Items {
+		// Only include disruptable pods (Running, not terminating, and Ready)
+		if !isPodDisruptable(&pod) {
+			log.Debugf("Skipping pod %s/%s: phase=%s, deletionTimestamp=%v, ready=%v",
+				pod.Namespace, pod.Name, pod.Status.Phase, pod.DeletionTimestamp != nil,
+				podHasReadyCondition(&pod))
+			continue
+		}
+
 		podData[pod.Name] = pod.Spec.NodeName
 
 		// Cache the detailed pod information including creation timestamp
@@ -301,6 +327,16 @@ func findPDBPods(kubeClient *kubernetes.Clientset, pdb *policyv1.PodDisruptionBu
 		//fmt.Printf("Pod %s Node: %s\n", pod.Name, pod.Spec.NodeName)
 	}
 	return podData, nil
+}
+
+// podHasReadyCondition is a helper to check if pod has Ready condition (for logging)
+func podHasReadyCondition(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func processPDBs(kubeClient *kubernetes.Clientset, nodeGroups *nodegroup.Collection) ([]PDBViolation, *PodCache, error) {
