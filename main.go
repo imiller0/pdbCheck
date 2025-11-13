@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 )
 
 // Global configuration flags
@@ -723,6 +724,9 @@ func fixPDBViolationsInteractively(kubeClient *kubernetes.Clientset, violations 
 }
 
 func main() {
+	// Initialize klog flags before parsing command line flags
+	klog.InitFlags(nil)
+
 	config := parseFlags()
 	setupLogging(config.loglevel, config.debug)
 
@@ -786,13 +790,24 @@ func parseFlags() Config {
 	return config
 }
 
-// setupLogging configures the logging level
+// setupLogging configures the logging level for both logrus and klog
 func setupLogging(loglevel string, debug bool) {
+	// If debug flag is set, override loglevel to debug
 	if debug {
-		log.SetLevel(log.DebugLevel)
-		return
+		loglevel = "debug"
 	}
 
+	// Configure klog based on loglevel: enable verbose messages in debug mode
+	if loglevel == "debug" {
+		// Allow klog messages in debug mode and write to stderr
+		_ = flag.Set("logtostderr", "true")
+		_ = flag.Set("v", "3+")
+	} else {
+		// Suppress klog messages by not writing to stderr when not in debug mode
+		_ = flag.Set("logtostderr", "false")
+	}
+
+	// Configure logrus based on loglevel
 	switch loglevel {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
